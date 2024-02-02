@@ -1,5 +1,4 @@
-#Transformer Summarizer
-
+# Transformer Summarizer
 Hanf-crafted transformer for text summarization tasks. I implemented the classic encoder-decoder attention mechanism and utilized the transformer to summarize texts. The dataset used to train this small model is taken from DeepLearning.ai's "Natural Language Processing with Attention Models" course. Currently, the loss is as follows:
 
 ![Loss](loss.jpg)
