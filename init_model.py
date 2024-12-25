@@ -41,7 +41,7 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
 
 learning_rate = CustomSchedule(embedding_dim)
 
-optimizer = tf.keras.optimizers.Adam(0.0002, beta_1=0.9, beta_2=0.98, epsilon=1e-9) 
+optimizer = tf.keras.optimizers.Adam(0.0002, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
 
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
     from_logits=False, reduction="none"
@@ -66,33 +66,37 @@ def train_step(model, inp: tf.Tensor, tar: tf.Tensor) -> None:
     """
     One training step for the transformer
     Arguments:
-        inp (tf.Tensor): Input data to summarize
-        tar (tf.Tensor): Target (summary)
+        inp (tf.Tensor): Input data to summarize (encoder input)
+        tar (tf.Tensor): Target (summary, decoder input)
     Returns:
         None
     """
-    tar_inp = tar[:, :-1]
-    tar_real = tar[:, 1:]
+    tar_inp = tar[:, :-1]  # Remove the last token (target input)
+    tar_real = tar[:, 1:]  # Remove the first token (target output)
 
     # Create masks
     enc_padding_mask = create_padding_mask(inp)
     look_ahead_mask = create_look_ahead_mask(tf.shape(tar_inp)[1])
-    dec_padding_mask = create_padding_mask(inp) # Notice that both encoder and decoder padding masks are equal
+    dec_padding_mask = create_padding_mask(inp)
 
     with tf.GradientTape() as tape:
+        # Pass all arguments correctly to the model
         predictions, _ = model(
-            inp,
-            tar_inp, 
-            True, 
-            enc_padding_mask, 
-            look_ahead_mask, 
-            dec_padding_mask
+            input_sentence=inp,
+            target_sentence=tar_inp,
+            training=True,
+            enc_padding_mask=enc_padding_mask,
+            look_ahead_mask=look_ahead_mask,
+            dec_padding_mask=dec_padding_mask,
         )
+        # Compute the loss
         loss = masked_loss(tar_real, predictions)
 
-    gradients = tape.gradient(loss, transformer.trainable_variables)
-    optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
+    # Compute and apply gradients
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
+    # Update training loss
     train_loss(loss)
 
 
@@ -154,6 +158,7 @@ def summarize(model, input_document: tf.Tensor) -> str:
         0
     ]  # since there is just one translated document
 
+
 ## train the model and plot the loss
 ## Take an example from the test set, to monitor it during training
 test_example = 0
@@ -165,28 +170,28 @@ epochs = 20
 
 # Training loop
 for epoch in range(epochs):
-    
-    start = time.time()
-    train_loss.reset_states()
-    number_of_batches=len(list(enumerate(dataset)))
 
-    for (batch, (inp, tar)) in enumerate(dataset):
-        print(f'Epoch {epoch+1}, Batch {batch+1}/{number_of_batches}', end='\r')
+    start = time.time()
+    train_loss.reset_state()
+    number_of_batches = len(list(enumerate(dataset)))
+
+    for batch, (inp, tar) in enumerate(dataset):
+        print(f"Epoch {epoch+1}, Batch {batch+1}/{number_of_batches}", end="\r")
         train_step(transformer, inp, tar)
-    
-    print (f'Epoch {epoch+1}, Loss {train_loss.result():.4f}')
+
+    print(f"Epoch {epoch+1}, Loss {train_loss.result():.4f}")
     losses.append(train_loss.result())
-    
-    print (f'Time taken for one epoch: {time.time() - start} sec')
-    print('Example summarization on the test set:')
-    print('  True summarization:')
-    print(f'    {true_summary}')
-    print('  Predicted summarization:')
-    print(f'    {summarize(transformer, true_document)}\n')
+
+    print(f"Time taken for one epoch: {time.time() - start} sec")
+    print("Example summarization on the test set:")
+    print("  True summarization:")
+    print(f"    {true_summary}")
+    print("  Predicted summarization:")
+    print(f"    {summarize(transformer, true_document)}\n")
 
 plt.plot(losses)
-plt.ylabel('Loss')
-plt.xlabel('Epoch')
+plt.ylabel("Loss")
+plt.xlabel("Epoch")
 plt.show()
 
 # Save the model
