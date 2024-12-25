@@ -183,7 +183,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         training: bool,
         look_ahead_mask: tf.Tensor,
         padding_mask: tf.Tensor,
-    ) -> (tf.Tensor, tf.Tensor, tf.Tensor):
+    ) -> (tf.Tensor, tf.Tensor, tf.Tensor): # type: ignore
         """
         Forward pass for the Decoder Layer
 
@@ -273,7 +273,7 @@ class Decoder(tf.keras.layers.Layer):
         training: bool,
         look_ahead_mask: tf.Tensor,
         padding_mask: tf.Tensor,
-    ) -> (tf.Tensor, tf.Tensor, tf.Tensor):
+    ) -> (tf.Tensor, tf.Tensor, tf.Tensor): # type: ignore
         """
         Forward pass for the Decoder
 
