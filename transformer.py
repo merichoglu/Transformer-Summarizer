@@ -1,12 +1,6 @@
 import tensorflow as tf
 from encoder_decoder import *
 
-# The flow of the transformer model is as follows:
-# 1. The input sentence is passed through N encoder layers that generates an output for each word/token in the sentence.
-# 2. The decoder is given the target sentence and the encoder output to produce the final output.
-# 3. The transformer model outputs the predicted target sentence.
-
-
 class Transformer(tf.keras.Model):
     """
     Complete transformer with an encoder and a decoder
@@ -64,10 +58,22 @@ class Transformer(tf.keras.Model):
         """
         Forward pass for the complete transformer
         """
-        encoder_output = self.encoder(input_sentence, training, enc_padding_mask)
-        decoder_output, attention_weights = self.decoder(
-            target_sentence, encoder_output, training, look_ahead_mask, dec_padding_mask
+        # encode
+        encoder_output = self.encoder(
+            x=input_sentence,  
+            training=training, 
+            mask=enc_padding_mask
         )
-        final_output = self.final_layer(decoder_output)
 
+        # decode
+        decoder_output, attention_weights = self.decoder(
+            x=target_sentence,
+            enc_output=encoder_output,
+            training=training, 
+            look_ahead_mask=look_ahead_mask,
+            padding_mask=dec_padding_mask,
+        )
+
+        # final
+        final_output = self.final_layer(decoder_output)
         return final_output, attention_weights

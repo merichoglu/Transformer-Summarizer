@@ -117,12 +117,12 @@ def next_word(model, encoder_input: tf.Tensor, output: tf.Tensor) -> tf.Tensor:
 
     # Run the prediction of the next word with the transformer model
     predictions, attention_weights = model(
-        encoder_input,
-        output,
-        False,
-        enc_padding_mask,
-        look_ahead_mask,
-        dec_padding_mask,
+        input_sentence=encoder_input,
+        target_sentence=output,
+        training=False,  # pass "False" as a keyword
+        enc_padding_mask=enc_padding_mask,
+        look_ahead_mask=look_ahead_mask,
+        dec_padding_mask=dec_padding_mask,
     )
 
     predictions = predictions[:, -1:, :]

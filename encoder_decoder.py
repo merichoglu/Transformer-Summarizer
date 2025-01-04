@@ -1,21 +1,13 @@
 import tensorflow as tf
-from transformer_utils import *
+from transformer_utils import *  # Make sure your create_look_ahead_mask and create_padding_mask return broadcastable shapes
 
 
 def FullyConnected(embedding_dim: int, fully_connected_dim: int) -> tf.keras.Model:
     """
-    Returns a sequential model consisting of two dense layers. The first dense layer has
-    fully_connected_dim neurons and is activated by relu. The second dense layer has
-    embedding_dim and no activation.
-
-    Arguments:
-        embedding_dim (int): output dimension
-        fully_connected_dim (int): dimension of the hidden layer
-
-    Returns:
-        _ (tf.keras.Model): sequential model
+    sequential model with two dense layers:
+      - dense(fully_connected_dim, relu)
+      - dense(embedding_dim)
     """
-
     return tf.keras.Sequential(
         [
             tf.keras.layers.Dense(fully_connected_dim, activation="relu"),
@@ -26,10 +18,7 @@ def FullyConnected(embedding_dim: int, fully_connected_dim: int) -> tf.keras.Mod
 
 class EncoderLayer(tf.keras.layers.Layer):
     """
-    The encoder layer is composed by a multi-head self-attention mechanism,
-    followed by a simple, positionwise fully connected feed-forward network.
-    This architecture includes a residual connection around each of the two
-    sub-layers, followed by layer normalization.
+    One encoder layer = multi-head self-attention + ffn
     """
 
     def __init__(
@@ -40,7 +29,6 @@ class EncoderLayer(tf.keras.layers.Layer):
         dropout_rate=0.1,
         layernorm_eps=1e-6,
     ):
-
         super(EncoderLayer, self).__init__()
 
         self.mha = tf.keras.layers.MultiHeadAttention(
@@ -55,18 +43,15 @@ class EncoderLayer(tf.keras.layers.Layer):
 
     def call(self, x: tf.Tensor, training: bool, mask: tf.Tensor) -> tf.Tensor:
         """
-        Forward pass for the Encoder Layer
-
-        Arguments:
-            x (tf.Tensor): Tensor of shape (batch_size, input_seq_len, fully_connected_dim)
-            training (bool): Boolean, set to true to activate
-                        the training mode for dropout layers
-            mask (tf.Tensor): Boolean mask to ensure that the padding is not
-                    treated as part of the input
-        Returns:
-            encoder_layer_out (tf.Tensor): Tensor of shape (batch_size, input_seq_len, embedding_dim)
+        x shape: (batch_size, input_seq_len, embedding_dim)
+        mask shape: must broadcast to (batch_size, num_heads, input_seq_len, input_seq_len)
         """
-        self_mha_output = self.mha(x, x, x, mask)
+        # -- KEY CHANGE HERE --
+        # pass attention_mask=mask as a keyword argument
+        self_mha_output = self.mha(
+            query=x, value=x, key=x, attention_mask=mask, training=training
+        )
+
         skip_x_attention = self.layernorm1(x + self_mha_output)
         ffn_output = self.ffn(skip_x_attention)
         ffn_output = self.dropout_ffn(ffn_output, training=training)
@@ -76,9 +61,9 @@ class EncoderLayer(tf.keras.layers.Layer):
 
 class Encoder(tf.keras.layers.Layer):
     """
-    The entire Encoder starts by passing the input to an embedding layer
-    and using positional encoding to then pass the output through a stack of
-    encoder Layers
+    The entire Encoder =
+      - Embedding + positional_encoding
+      - stacked encoder layers
     """
 
     def __init__(
@@ -117,35 +102,28 @@ class Encoder(tf.keras.layers.Layer):
 
     def call(self, x: tf.Tensor, training: bool, mask: tf.Tensor) -> tf.Tensor:
         """
-        Forward pass for the Encoder
-
-        Arguments:
-            x (tf.Tensor): Tensor of shape (batch_size, input_seq_len)
-            training (bool): Boolean, set to true to activate
-                        the training mode for dropout layers
-            mask (tf.Tensor): Boolean mask to ensure that the padding is not
-                    treated as part of the input
-        Returns:
-            x (tf.Tensor): Tensor of shape (batch_size, input_seq_len, embedding_dim)
+        x shape: (batch_size, input_seq_len)
+        mask shape: must broadcast to (batch_size, num_heads, input_seq_len, input_seq_len)
         """
-        # create the embeddings, scale them, add the positional encodings, apply the dropout,
-        # and iterate through the encoder layers
         seq_len = tf.shape(x)[1]
+
         x = self.embedding(x)
         x *= tf.math.sqrt(tf.cast(self.embedding_dim, tf.float32))
         x += self.pos_encoding[:, :seq_len, :]
         x = self.dropout(x, training=training)
+
         for i in range(self.num_layers):
-            x = self.enc_layers[i](x, training, mask)
+            x = self.enc_layers[i](x, training=training, mask=mask)
+
         return x
 
 
 class DecoderLayer(tf.keras.layers.Layer):
     """
-    The decoder layer is composed by two multi-head attention blocks,
-    one that takes the new input and uses self-attention, and the other
-    one that combines it with the output of the encoder, followed by a
-    fully connected block.
+    One decoder layer =
+      - first multi-head self-attn (with lookahead_mask)
+      - second multi-head attn (attending to encoder output, with padding_mask)
+      - ffn
     """
 
     def __init__(
@@ -166,9 +144,7 @@ class DecoderLayer(tf.keras.layers.Layer):
             num_heads=num_heads, key_dim=embedding_dim, dropout=dropout_rate
         )
 
-        self.ffn = FullyConnected(
-            embedding_dim=embedding_dim, fully_connected_dim=fully_connected_dim
-        )
+        self.ffn = FullyConnected(embedding_dim, fully_connected_dim)
 
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=layernorm_eps)
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=layernorm_eps)
@@ -183,43 +159,42 @@ class DecoderLayer(tf.keras.layers.Layer):
         training: bool,
         look_ahead_mask: tf.Tensor,
         padding_mask: tf.Tensor,
-    ) -> (tf.Tensor, tf.Tensor, tf.Tensor): # type: ignore
+    ) -> (tf.Tensor, tf.Tensor, tf.Tensor):
         """
-        Forward pass for the Decoder Layer
-
-        Arguments:
-            x (tf.Tensor): Tensor of shape (batch_size, target_seq_len, fully_connected_dim)
-            enc_output (tf.Tensor): Tensor of shape(batch_size, input_seq_len, fully_connected_dim)
-            training (bool): Boolean, set to true to activate
-                        the training mode for dropout layers
-            look_ahead_mask (tf.Tensor): Boolean mask for the target_input
-            padding_mask (tf.Tensor): Boolean mask for the second multihead attention layer
-        Returns:
-            out3 (tf.Tensor): Tensor of shape (batch_size, target_seq_len, fully_connected_dim)
-            attn_weights_block1 (tf.Tensor): Tensor of shape (batch_size, num_heads, target_seq_len, target_seq_len)
-            attn_weights_block2 (tf.Tensor): Tensor of shape (batch_size, num_heads, target_seq_len, input_seq_len)
+        x shape: (batch_size, target_seq_len, embedding_dim)
+        enc_output shape: (batch_size, input_seq_len, embedding_dim)
+        look_ahead_mask shape: must broadcast to
+                               (batch_size, num_heads, target_seq_len, target_seq_len)
+        padding_mask shape: must broadcast to
+                            (batch_size, num_heads, target_seq_len, input_seq_len)
         """
+        # -- KEY CHANGE HERE --
+        # pass attention_mask=look_ahead_mask as a keyword argument
         mult_attn_out1, attn_weights_block1 = self.mha1(
-            x, x, x, look_ahead_mask, training=training, return_attention_scores=True
+            query=x,
+            value=x,
+            key=x,
+            attention_mask=look_ahead_mask,
+            training=training,
+            return_attention_scores=True,
         )
 
         Q1 = self.layernorm1(mult_attn_out1 + x)
 
+        # -- KEY CHANGE HERE --
+        # pass attention_mask=padding_mask as a keyword argument
         mult_attn_out2, attn_weights_block2 = self.mha2(
-            Q1,
-            enc_output,
-            enc_output,
-            padding_mask,
+            query=Q1,
+            value=enc_output,
+            key=enc_output,
+            attention_mask=padding_mask,
             training=training,
             return_attention_scores=True,
         )
 
         mult_attn_out2 = self.layernorm2(Q1 + mult_attn_out2)
-
         ffn_output = self.ffn(mult_attn_out2)
-
         ffn_output = self.dropout_ffn(ffn_output, training=training)
-
         out3 = self.layernorm3(ffn_output + mult_attn_out2)
 
         return out3, attn_weights_block1, attn_weights_block2
@@ -227,9 +202,9 @@ class DecoderLayer(tf.keras.layers.Layer):
 
 class Decoder(tf.keras.layers.Layer):
     """
-    The entire Decoder starts by passing the target input to an embedding layer
-    and using positional encoding to then pass the output through a stack of
-    decoder Layers
+    The entire Decoder =
+      - Embedding + positional_encoding
+      - stacked decoder layers
     """
 
     def __init__(
@@ -273,27 +248,14 @@ class Decoder(tf.keras.layers.Layer):
         training: bool,
         look_ahead_mask: tf.Tensor,
         padding_mask: tf.Tensor,
-    ) -> (tf.Tensor, tf.Tensor, tf.Tensor): # type: ignore
+    ) -> (tf.Tensor, dict):
         """
-        Forward pass for the Decoder
-
-        Arguments:
-            x (tf.Tensor): Tensor of shape (batch_size, target_seq_len)
-            enc_output (tf.Tensor): Tensor of shape (batch_size, input_seq_len, fully_connected_dim)
-            training (bool): Boolean, set to true to activate
-                        the training mode for dropout layers
-            look_ahead_mask (tf.Tensor): Boolean mask for the target_input
-            padding_mask (tf.Tensor): Boolean mask for the second multihead attention layer
-        Returns:
-            x (tf.Tensor): Tensor of shape (batch_size, target_seq_len, fully_connected_dim)
-            attn_weights_block1 (tf.Tensor): Tensor of shape (batch_size, num_heads, target_seq_len, target_seq_len)
-            attn_weights_block2 (tf.Tensor): Tensor of shape (batch_size, num_heads, target_seq_len, input_seq_len)
+        x shape: (batch_size, target_seq_len)
+        enc_output shape: (batch_size, input_seq_len, embedding_dim)
         """
-
-        # create the embeddings, scale them, and add the positional encodings, apply the dropout,
-        # and iterate through the decoder layers, and update the attention weights
         seq_len = tf.shape(x)[1]
         attention_weights = {}
+
         x = self.embedding(x)
         x *= tf.math.sqrt(tf.cast(self.embedding_dim, tf.float32))
         x += self.pos_encoding[:, :seq_len, :]
@@ -301,7 +263,11 @@ class Decoder(tf.keras.layers.Layer):
 
         for i in range(self.num_layers):
             x, block1, block2 = self.dec_layers[i](
-                x, enc_output, training, look_ahead_mask, padding_mask
+                x=x,
+                enc_output=enc_output,
+                training=training,
+                look_ahead_mask=look_ahead_mask,
+                padding_mask=padding_mask,
             )
             attention_weights[f"decoder_layer{i+1}_block1"] = block1
             attention_weights[f"decoder_layer{i+1}_block2"] = block2
