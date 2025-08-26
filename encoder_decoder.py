@@ -1,3 +1,4 @@
+from ast import Tuple
 import tensorflow as tf
 from transformer_utils import *  # Make sure your create_look_ahead_mask and create_padding_mask return broadcastable shapes
 
@@ -159,7 +160,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         training: bool,
         look_ahead_mask: tf.Tensor,
         padding_mask: tf.Tensor,
-    ) -> (tf.Tensor, tf.Tensor, tf.Tensor):
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """
         x shape: (batch_size, target_seq_len, embedding_dim)
         enc_output shape: (batch_size, input_seq_len, embedding_dim)
@@ -248,7 +249,7 @@ class Decoder(tf.keras.layers.Layer):
         training: bool,
         look_ahead_mask: tf.Tensor,
         padding_mask: tf.Tensor,
-    ) -> (tf.Tensor, dict):
+    ) -> tuple[tf.Tensor, dict]:
         """
         x shape: (batch_size, target_seq_len)
         enc_output shape: (batch_size, input_seq_len, embedding_dim)
