@@ -1,7 +1,6 @@
-from ast import Tuple
+from typing import Tuple
 import tensorflow as tf
-from transformer_utils import *  # Make sure your create_look_ahead_mask and create_padding_mask return broadcastable shapes
-
+from transformer_utils import positional_encoding, create_padding_mask, create_look_ahead_mask # added import
 
 def FullyConnected(embedding_dim: int, fully_connected_dim: int) -> tf.keras.Model:
     """
@@ -31,6 +30,9 @@ class EncoderLayer(tf.keras.layers.Layer):
         layernorm_eps=1e-6,
     ):
         super(EncoderLayer, self).__init__()
+        
+        # Support masking in the layer
+        self.supports_masking = True
 
         self.mha = tf.keras.layers.MultiHeadAttention(
             num_heads=num_heads, key_dim=embedding_dim, dropout=dropout_rate
@@ -47,8 +49,6 @@ class EncoderLayer(tf.keras.layers.Layer):
         x shape: (batch_size, input_seq_len, embedding_dim)
         mask shape: must broadcast to (batch_size, num_heads, input_seq_len, input_seq_len)
         """
-        # -- KEY CHANGE HERE --
-        # pass attention_mask=mask as a keyword argument
         self_mha_output = self.mha(
             query=x, value=x, key=x, attention_mask=mask, training=training
         )
@@ -74,18 +74,24 @@ class Encoder(tf.keras.layers.Layer):
         num_heads,
         fully_connected_dim,
         input_vocab_size,
-        maximum_position_encoding,
+        maximum_positional_encoding,
         dropout_rate=0.1,
         layernorm_eps=1e-6,
     ):
         super(Encoder, self).__init__()
+        
+        # Support masking in the layer
+        self.supports_masking = True
 
         self.embedding_dim = embedding_dim
         self.num_layers = num_layers
 
-        self.embedding = tf.keras.layers.Embedding(input_vocab_size, embedding_dim)
+        # Enable masking in embedding layer
+        self.embedding = tf.keras.layers.Embedding(
+            input_vocab_size, embedding_dim, mask_zero=True
+        )
         self.pos_encoding = positional_encoding(
-            maximum_position_encoding, embedding_dim
+            maximum_positional_encoding, embedding_dim
         )
 
         self.enc_layers = [
@@ -102,10 +108,6 @@ class Encoder(tf.keras.layers.Layer):
         self.dropout = tf.keras.layers.Dropout(dropout_rate)
 
     def call(self, x: tf.Tensor, training: bool, mask: tf.Tensor) -> tf.Tensor:
-        """
-        x shape: (batch_size, input_seq_len)
-        mask shape: must broadcast to (batch_size, num_heads, input_seq_len, input_seq_len)
-        """
         seq_len = tf.shape(x)[1]
 
         x = self.embedding(x)
@@ -136,6 +138,9 @@ class DecoderLayer(tf.keras.layers.Layer):
         layernorm_eps=1e-6,
     ):
         super(DecoderLayer, self).__init__()
+        
+        # Support masking in the layer
+        self.supports_masking = True
 
         self.mha1 = tf.keras.layers.MultiHeadAttention(
             num_heads=num_heads, key_dim=embedding_dim, dropout=dropout_rate
@@ -164,13 +169,8 @@ class DecoderLayer(tf.keras.layers.Layer):
         """
         x shape: (batch_size, target_seq_len, embedding_dim)
         enc_output shape: (batch_size, input_seq_len, embedding_dim)
-        look_ahead_mask shape: must broadcast to
-                               (batch_size, num_heads, target_seq_len, target_seq_len)
-        padding_mask shape: must broadcast to
-                            (batch_size, num_heads, target_seq_len, input_seq_len)
         """
-        # -- KEY CHANGE HERE --
-        # pass attention_mask=look_ahead_mask as a keyword argument
+        
         mult_attn_out1, attn_weights_block1 = self.mha1(
             query=x,
             value=x,
@@ -179,11 +179,8 @@ class DecoderLayer(tf.keras.layers.Layer):
             training=training,
             return_attention_scores=True,
         )
-
         Q1 = self.layernorm1(mult_attn_out1 + x)
 
-        # -- KEY CHANGE HERE --
-        # pass attention_mask=padding_mask as a keyword argument
         mult_attn_out2, attn_weights_block2 = self.mha2(
             query=Q1,
             value=enc_output,
@@ -215,18 +212,24 @@ class Decoder(tf.keras.layers.Layer):
         num_heads,
         fully_connected_dim,
         target_vocab_size,
-        maximum_position_encoding,
+        maximum_positional_encoding,
         dropout_rate=0.1,
         layernorm_eps=1e-6,
     ):
         super(Decoder, self).__init__()
+        
+        # Support masking in the layer
+        self.supports_masking = True
 
         self.embedding_dim = embedding_dim
         self.num_layers = num_layers
 
-        self.embedding = tf.keras.layers.Embedding(target_vocab_size, embedding_dim)
+        # Enable masking in embedding layer
+        self.embedding = tf.keras.layers.Embedding(
+            target_vocab_size, embedding_dim, mask_zero=True
+        )
         self.pos_encoding = positional_encoding(
-            maximum_position_encoding, embedding_dim
+            maximum_positional_encoding, embedding_dim
         )
 
         self.dec_layers = [
@@ -250,10 +253,6 @@ class Decoder(tf.keras.layers.Layer):
         look_ahead_mask: tf.Tensor,
         padding_mask: tf.Tensor,
     ) -> tuple[tf.Tensor, dict]:
-        """
-        x shape: (batch_size, target_seq_len)
-        enc_output shape: (batch_size, input_seq_len, embedding_dim)
-        """
         seq_len = tf.shape(x)[1]
         attention_weights = {}
 

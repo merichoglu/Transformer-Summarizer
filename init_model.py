@@ -1,3 +1,5 @@
+import numpy as np
+import tensorflow as tf
 from transformer import *
 from data_preprocess import *
 from transformer_utils import *
@@ -7,8 +9,8 @@ import time
 # define model parameters
 num_layers = 2
 embedding_dim = 128
-fully_connected_dim = 128
-num_heads = 2
+fully_connected_dim = 512  # Increased for better capacity
+num_heads = 8  # Increased number of heads
 positional_encoding_length = 256
 
 # Initialize the model
@@ -22,7 +24,6 @@ transformer = Transformer(
     positional_encoding_length,
     positional_encoding_length,
 )
-
 
 # Initialize the optimizer. THIS PIECE IS FROM THE ORIGINAL TRANSFORMER PAPER
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
@@ -38,15 +39,14 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
 
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
 
+# Use custom learning rate schedule
+learning_rate = CustomSchedule(embedding_dim, warmup_steps=1000)  # Reduced warmup
+optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
 
-learning_rate = CustomSchedule(embedding_dim)
-
-optimizer = tf.keras.optimizers.Adam(0.0002, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
-
+# Fix loss function - use from_logits=True since we removed softmax
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
-    from_logits=False, reduction="none"
+    from_logits=True, reduction="none"
 )
-
 
 def masked_loss(real, pred):
     mask = tf.math.logical_not(tf.math.equal(real, 0))
@@ -56,10 +56,8 @@ def masked_loss(real, pred):
     loss_ *= mask
     return tf.reduce_sum(loss_) / tf.reduce_sum(mask)
 
-
 train_loss = tf.keras.metrics.Mean(name="train_loss")
 losses = []  # store the loss for plotting
-
 
 @tf.function
 def train_step(model, inp: tf.Tensor, tar: tf.Tensor) -> None:
@@ -74,31 +72,33 @@ def train_step(model, inp: tf.Tensor, tar: tf.Tensor) -> None:
     tar_inp = tar[:, :-1]  # Remove the last token (target input)
     tar_real = tar[:, 1:]  # Remove the first token (target output)
 
-    # Create masks
-    enc_padding_mask = create_padding_mask(inp)
-    look_ahead_mask = create_look_ahead_mask(tf.shape(tar_inp)[1])
-    dec_padding_mask = create_padding_mask(inp)
-
     with tf.GradientTape() as tape:
+        # Create masks
+        enc_padding_mask = create_padding_mask(inp)
+        combined_mask = create_combined_mask(tar_inp)
+        dec_padding_mask = create_padding_mask(inp)
+
         # Pass all arguments correctly to the model
         predictions, _ = model(
             input_sentence=inp,
             target_sentence=tar_inp,
             training=True,
             enc_padding_mask=enc_padding_mask,
-            look_ahead_mask=look_ahead_mask,
+            look_ahead_mask=combined_mask,
             dec_padding_mask=dec_padding_mask,
         )
+        
         # Compute the loss
         loss = masked_loss(tar_real, predictions)
 
     # Compute and apply gradients
     gradients = tape.gradient(loss, model.trainable_variables)
+    # Apply gradient clipping
+    gradients = [tf.clip_by_norm(g, 1.0) for g in gradients]
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
     # Update training loss
     train_loss(loss)
-
 
 # next word prediction helper function
 def next_word(model, encoder_input: tf.Tensor, output: tf.Tensor) -> tf.Tensor:
@@ -112,16 +112,16 @@ def next_word(model, encoder_input: tf.Tensor, output: tf.Tensor) -> tf.Tensor:
     """
 
     enc_padding_mask = create_padding_mask(encoder_input)
-    look_ahead_mask = create_look_ahead_mask(tf.shape(output)[1])
+    combined_mask = create_combined_mask(output)
     dec_padding_mask = create_padding_mask(encoder_input)
 
     # Run the prediction of the next word with the transformer model
     predictions, attention_weights = model(
         input_sentence=encoder_input,
         target_sentence=output,
-        training=False,  # pass "False" as a keyword
+        training=False,
         enc_padding_mask=enc_padding_mask,
-        look_ahead_mask=look_ahead_mask,
+        look_ahead_mask=combined_mask,
         dec_padding_mask=dec_padding_mask,
     )
 
@@ -129,7 +129,6 @@ def next_word(model, encoder_input: tf.Tensor, output: tf.Tensor) -> tf.Tensor:
     predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
 
     return predicted_id
-
 
 def summarize(model, input_document: tf.Tensor) -> str:
     """
@@ -154,10 +153,7 @@ def summarize(model, input_document: tf.Tensor) -> str:
         if predicted_id == tokenizer.word_index["[EOS]"]:
             break
 
-    return tokenizer.sequences_to_texts(output.numpy())[
-        0
-    ]  # since there is just one translated document
-
+    return tokenizer.sequences_to_texts(output.numpy())[0]
 
 ## train the model and plot the loss
 ## Take an example from the test set, to monitor it during training
@@ -166,33 +162,66 @@ true_summary = summary_test[test_example]
 true_document = document_test[test_example]
 
 # Define the number of epochs
-epochs = 20
+epochs = 10
+
+# Add early stopping
+best_loss = float('inf')
+patience = 3
+patience_counter = 0
+
+print("Starting training...")
 
 # Training loop
 for epoch in range(epochs):
-
     start = time.time()
     train_loss.reset_state()
-    number_of_batches = len(list(enumerate(dataset)))
-
+    
+    # Get total number of batches for progress tracking
+    total_batches = len(list(enumerate(dataset)))
+    
     for batch, (inp, tar) in enumerate(dataset):
-        print(f"Epoch {epoch+1}, Batch {batch+1}/{number_of_batches}", end="\r")
+        print(f"Epoch {epoch+1}/{epochs}, Batch {batch+1}/{total_batches} - Loss: {train_loss.result():.4f}", end="\r")
         train_step(transformer, inp, tar)
 
-    print(f"Epoch {epoch+1}, Loss {train_loss.result():.4f}")
-    losses.append(train_loss.result())
+    epoch_loss = train_loss.result()
+    print(f"\nEpoch {epoch+1}/{epochs}, Loss {epoch_loss:.4f}")
+    losses.append(epoch_loss)
 
-    print(f"Time taken for one epoch: {time.time() - start} sec")
+    print(f"Time taken for one epoch: {time.time() - start:.2f} sec")
+    
+    # Early stopping check
+    if epoch_loss < best_loss:
+        best_loss = epoch_loss
+        patience_counter = 0
+        # Save best model
+        transformer.save_weights("transformer_best_weights")
+    else:
+        patience_counter += 1
+        
+    if patience_counter >= patience:
+        print(f"Early stopping triggered after {epoch+1} epochs")
+        break
+    
     print("Example summarization on the test set:")
     print("  True summarization:")
     print(f"    {true_summary}")
     print("  Predicted summarization:")
-    print(f"    {summarize(transformer, true_document)}\n")
+    try:
+        pred_summary = summarize(transformer, true_document)
+        print(f"    {pred_summary}")
+    except Exception as e:
+        print(f"    Error in prediction: {e}")
+    print()
 
-plt.plot(losses)
-plt.ylabel("Loss")
-plt.xlabel("Epoch")
+# Plot the loss
+plt.figure(figsize=(10, 6))
+plt.plot(losses, 'b-', linewidth=2)
+plt.title('Training Loss Over Time')
+plt.ylabel('Loss')
+plt.xlabel('Epoch')
+plt.grid(True, alpha=0.3)
 plt.show()
 
-# Save the model
-transformer.save_weights("transformer_weights")
+# Save the final model
+transformer.save_weights("transformer_final_weights")
+print("Training completed and model saved!")

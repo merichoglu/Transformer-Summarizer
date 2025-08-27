@@ -5,7 +5,6 @@ class Transformer(tf.keras.Model):
     """
     Complete transformer with an encoder and a decoder
     """
-
     def __init__(
         self,
         num_layers,
@@ -20,7 +19,7 @@ class Transformer(tf.keras.Model):
         layernorm_eps=1e-6,
     ):
         super(Transformer, self).__init__()
-
+        
         self.encoder = Encoder(
             num_layers,
             embedding_dim,
@@ -31,6 +30,7 @@ class Transformer(tf.keras.Model):
             dropout_rate,
             layernorm_eps,
         )
+        
         self.decoder = Decoder(
             num_layers,
             embedding_dim,
@@ -42,10 +42,8 @@ class Transformer(tf.keras.Model):
             layernorm_eps,
         )
 
-        self.final_layer = tf.keras.layers.Dense(
-            target_vocab_size, activation="softmax"
-        )
-
+        self.final_layer = tf.keras.layers.Dense(target_vocab_size)
+    
     def call(
         self,
         input_sentence: tf.Tensor,
@@ -60,20 +58,19 @@ class Transformer(tf.keras.Model):
         """
         # encode
         encoder_output = self.encoder(
-            x=input_sentence,  
-            training=training, 
-            mask=enc_padding_mask
+            x=input_sentence, training=training, mask=enc_padding_mask
         )
-
+        
         # decode
         decoder_output, attention_weights = self.decoder(
             x=target_sentence,
             enc_output=encoder_output,
-            training=training, 
+            training=training,
             look_ahead_mask=look_ahead_mask,
             padding_mask=dec_padding_mask,
         )
-
-        # final
+        
+        # final layer - output logits (no softmax)
         final_output = self.final_layer(decoder_output)
+        
         return final_output, attention_weights

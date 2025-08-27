@@ -1,7 +1,6 @@
 import numpy as np
 import tensorflow as tf
 
-
 def positional_encoding(positions: int, d_model: int) -> tf.Tensor:
     """
     Precomputes a matrix with all the positional encodings
@@ -33,33 +32,55 @@ def positional_encoding(positions: int, d_model: int) -> tf.Tensor:
     return tf.cast(pos_encoding, dtype=tf.float32)
 
 
-def create_padding_mask(decoder_token_ids) -> tf.Tensor:
+def create_padding_mask(token_ids: tf.Tensor) -> tf.Tensor:
     """
-    Creates a matrix mask for the padding cells
-
+    Creates a padding mask for encoder-decoder attention
+    
     Arguments:
-        decoder_token_ids (matrix like): matrix of size (n, m)
+        token_ids (tf.Tensor): tensor of shape (batch, seq_len)
 
     Returns:
-        mask (tf.Tensor): Tensor with the padding mask of size (n, 1, m)
+        mask (tf.Tensor): Tensor with shape (batch, 1, 1, seq_len)
     """
-    seq = 1 - tf.cast(tf.math.equal(decoder_token_ids, 0), tf.float32)
-    return seq[:, tf.newaxis, :]
+    # Change the output to a boolean mask, which MultiHeadAttention handles correctly
+    # The shape should be (batch_size, 1, 1, seq_len)
+    mask = tf.cast(tf.equal(token_ids, 0), dtype=tf.bool)
+    return mask[:, tf.newaxis, tf.newaxis, :]
 
 
 def create_look_ahead_mask(size: int) -> tf.Tensor:
     """
-    Create a mask to hide the subsequent words
+    Create a mask to hide subsequent words
 
     Arguments:
-        size (int): Size of the mask
+        size (int): target sequence length
 
     Returns:
-        mask (tf.Tensor): Tensor with the look ahead mask
+        mask (tf.Tensor): Tensor with shape (1, 1, size, size)
     """
-    mask = tf.linalg.band_part(tf.ones((1, size, size)), -1, 0)
-    return mask
+    mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
+    return tf.cast(mask[tf.newaxis, tf.newaxis, :, :], dtype=tf.bool)
 
+
+def create_combined_mask(decoder_input: tf.Tensor) -> tf.Tensor:
+    """
+    Creates a combined mask for the decoder self-attention:
+      - look-ahead mask (to mask future tokens)
+      - decoder padding mask (to mask <pad> tokens)
+
+    Arguments:
+        decoder_input (tf.Tensor): decoder input of shape (batch, target_seq_len)
+
+    Returns:
+        combined_mask (tf.Tensor): Tensor with shape (batch, 1, target_seq_len, target_seq_len)
+    """
+    seq_len = tf.shape(decoder_input)[1]
+    look_ahead = create_look_ahead_mask(seq_len)
+    dec_padding = create_padding_mask(decoder_input)
+
+    # Use logical OR for combining boolean masks
+    return tf.logical_or(look_ahead, dec_padding)
+    
 
 def scaled_dot_product_attention(
     query: tf.Tensor, key: tf.Tensor, value: tf.Tensor, mask: tf.Tensor = None
@@ -77,13 +98,13 @@ def scaled_dot_product_attention(
         output (tf.Tensor): Tensor with the scaled dot product attention of shape (..., seq_len_q, depth)
         attention_weights (tf.Tensor): Tensor with the attention weights of shape (..., seq_len_q, seq_len_k)
     """
-    # just apply the formula softmax((QK^T)/sqrt(dk))V
     matmul_qk = tf.matmul(query, key, transpose_b=True)
     dk = tf.cast(tf.shape(key)[-1], tf.float32)
     scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
 
     if mask is not None:
-        scaled_attention_logits += (1.0 - mask) * -1e9
+        # Convert boolean mask to float and apply
+        scaled_attention_logits += tf.cast(mask, dtype=tf.float32) * -1e9
 
     attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)
     output = tf.matmul(attention_weights, value)
