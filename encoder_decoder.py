@@ -35,7 +35,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.supports_masking = True
 
         self.mha = tf.keras.layers.MultiHeadAttention(
-            num_heads=num_heads, key_dim=embedding_dim, dropout=dropout_rate
+            num_heads=num_heads, key_dim=embedding_dim // num_heads, dropout=dropout_rate
         )
 
         self.ffn = FullyConnected(embedding_dim, fully_connected_dim)
@@ -47,10 +47,10 @@ class EncoderLayer(tf.keras.layers.Layer):
     def call(self, x: tf.Tensor, training: bool, mask: tf.Tensor) -> tf.Tensor:
         """
         x shape: (batch_size, input_seq_len, embedding_dim)
-        mask shape: must broadcast to (batch_size, num_heads, input_seq_len, input_seq_len)
+        mask shape: (batch_size, input_seq_len) for padding mask
         """
         self_mha_output = self.mha(
-            query=x, value=x, key=x, attention_mask=mask, training=training
+            query=x, value=x, key=x, key_mask=mask, training=training
         )
 
         skip_x_attention = self.layernorm1(x + self_mha_output)
@@ -143,11 +143,11 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.supports_masking = True
 
         self.mha1 = tf.keras.layers.MultiHeadAttention(
-            num_heads=num_heads, key_dim=embedding_dim, dropout=dropout_rate
+            num_heads=num_heads, key_dim=embedding_dim // num_heads, dropout=dropout_rate
         )
 
         self.mha2 = tf.keras.layers.MultiHeadAttention(
-            num_heads=num_heads, key_dim=embedding_dim, dropout=dropout_rate
+            num_heads=num_heads, key_dim=embedding_dim // num_heads, dropout=dropout_rate
         )
 
         self.ffn = FullyConnected(embedding_dim, fully_connected_dim)
@@ -185,7 +185,7 @@ class DecoderLayer(tf.keras.layers.Layer):
             query=Q1,
             value=enc_output,
             key=enc_output,
-            attention_mask=padding_mask,
+            key_mask=padding_mask,
             training=training,
             return_attention_scores=True,
         )

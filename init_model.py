@@ -5,6 +5,7 @@ from data_preprocess import *
 from transformer_utils import *
 import matplotlib.pyplot as plt
 import time
+from tqdm import tqdm
 
 # define model parameters
 num_layers = 2
@@ -158,8 +159,8 @@ def summarize(model, input_document: tf.Tensor) -> str:
 ## train the model and plot the loss
 ## Take an example from the test set, to monitor it during training
 test_example = 0
-true_summary = summary_test[test_example]
-true_document = document_test[test_example]
+true_summary = summary[test_example]  # Use training data for evaluation
+true_document = document[test_example]  # Use training data for evaluation
 
 # Define the number of epochs
 epochs = 10
@@ -172,16 +173,16 @@ patience_counter = 0
 print("Starting training...")
 
 # Training loop
-for epoch in range(epochs):
+for epoch in tqdm(range(epochs), desc="Training Progress"):
     start = time.time()
     train_loss.reset_state()
-    
-    # Get total number of batches for progress tracking
-    total_batches = len(list(enumerate(dataset)))
-    
-    for batch, (inp, tar) in enumerate(dataset):
-        print(f"Epoch {epoch+1}/{epochs}, Batch {batch+1}/{total_batches} - Loss: {train_loss.result():.4f}", end="\r")
+
+    # Create progress bar for batches
+    batch_progress = tqdm(enumerate(dataset), desc=f"Epoch {epoch+1}/{epochs}", leave=False)
+
+    for batch, (inp, tar) in batch_progress:
         train_step(transformer, inp, tar)
+        batch_progress.set_postfix({"Loss": f"{train_loss.result():.4f}"})
 
     epoch_loss = train_loss.result()
     print(f"\nEpoch {epoch+1}/{epochs}, Loss {epoch_loss:.4f}")
@@ -194,7 +195,7 @@ for epoch in range(epochs):
         best_loss = epoch_loss
         patience_counter = 0
         # Save best model
-        transformer.save_weights("transformer_best_weights")
+        transformer.save_weights("transformer_best_weights.weights.h5")
     else:
         patience_counter += 1
         
@@ -223,5 +224,5 @@ plt.grid(True, alpha=0.3)
 plt.show()
 
 # Save the final model
-transformer.save_weights("transformer_final_weights")
+transformer.save_weights("transformer_final_weights.weights.h5")
 print("Training completed and model saved!")

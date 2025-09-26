@@ -35,17 +35,16 @@ def positional_encoding(positions: int, d_model: int) -> tf.Tensor:
 def create_padding_mask(token_ids: tf.Tensor) -> tf.Tensor:
     """
     Creates a padding mask for encoder-decoder attention
-    
+
     Arguments:
         token_ids (tf.Tensor): tensor of shape (batch, seq_len)
 
     Returns:
-        mask (tf.Tensor): Tensor with shape (batch, 1, 1, seq_len)
+        mask (tf.Tensor): Tensor with shape (batch, seq_len)
     """
-    # Change the output to a boolean mask, which MultiHeadAttention handles correctly
-    # The shape should be (batch_size, 1, 1, seq_len)
+    # For tf.keras.layers.MultiHeadAttention, mask should be (batch_size, seq_len)
     mask = tf.cast(tf.equal(token_ids, 0), dtype=tf.bool)
-    return mask[:, tf.newaxis, tf.newaxis, :]
+    return mask
 
 
 def create_look_ahead_mask(size: int) -> tf.Tensor:
@@ -56,10 +55,10 @@ def create_look_ahead_mask(size: int) -> tf.Tensor:
         size (int): target sequence length
 
     Returns:
-        mask (tf.Tensor): Tensor with shape (1, 1, size, size)
+        mask (tf.Tensor): Tensor with shape (size, size)
     """
     mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
-    return tf.cast(mask[tf.newaxis, tf.newaxis, :, :], dtype=tf.bool)
+    return tf.cast(mask, dtype=tf.bool)
 
 
 def create_combined_mask(decoder_input: tf.Tensor) -> tf.Tensor:
@@ -72,11 +71,14 @@ def create_combined_mask(decoder_input: tf.Tensor) -> tf.Tensor:
         decoder_input (tf.Tensor): decoder input of shape (batch, target_seq_len)
 
     Returns:
-        combined_mask (tf.Tensor): Tensor with shape (batch, 1, target_seq_len, target_seq_len)
+        combined_mask (tf.Tensor): Tensor with shape (batch, target_seq_len, target_seq_len)
     """
     seq_len = tf.shape(decoder_input)[1]
     look_ahead = create_look_ahead_mask(seq_len)
     dec_padding = create_padding_mask(decoder_input)
+
+    # Expand dec_padding to match look_ahead shape: (batch, seq_len, seq_len)
+    dec_padding = dec_padding[:, tf.newaxis, :] | dec_padding[:, :, tf.newaxis]
 
     # Use logical OR for combining boolean masks
     return tf.logical_or(look_ahead, dec_padding)
