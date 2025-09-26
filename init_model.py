@@ -1,4 +1,3 @@
-import numpy as np
 import tensorflow as tf
 from transformer import *
 from data_preprocess import *

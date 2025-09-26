@@ -1,6 +1,6 @@
 from typing import Tuple
 import tensorflow as tf
-from transformer_utils import positional_encoding, create_padding_mask, create_look_ahead_mask # added import
+from transformer_utils import positional_encoding
 
 def FullyConnected(embedding_dim: int, fully_connected_dim: int) -> tf.keras.Model:
     """
