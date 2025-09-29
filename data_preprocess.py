@@ -45,12 +45,33 @@ targets = tf.keras.preprocessing.sequence.pad_sequences(
 inputs = tf.cast(inputs, dtype=tf.int32)
 targets = tf.cast(targets, dtype=tf.int32)
 
-# Create the dataset
-BUFFER_SIZE = 10000
-BATCH_SIZE = 64
+# Create train/validation split
+TRAIN_SPLIT = 0.9
+total_samples = len(inputs)
+train_size = int(total_samples * TRAIN_SPLIT)
 
-dataset = (
-    tf.data.Dataset.from_tensor_slices((inputs, targets))
+# Split the data
+train_inputs = inputs[:train_size]
+train_targets = targets[:train_size]
+val_inputs = inputs[train_size:]
+val_targets = targets[train_size:]
+
+print(f"Training samples: {len(train_inputs)}")
+print(f"Validation samples: {len(val_inputs)}")
+
+# Create the datasets
+BUFFER_SIZE = 10000
+BATCH_SIZE = 16
+
+train_dataset = (
+    tf.data.Dataset.from_tensor_slices((train_inputs, train_targets))
     .shuffle(BUFFER_SIZE)
     .batch(BATCH_SIZE)
 )
+
+val_dataset = (
+    tf.data.Dataset.from_tensor_slices((val_inputs, val_targets))
+    .batch(BATCH_SIZE)
+)
+
+dataset = train_dataset
